@@ -192,65 +192,8 @@ export class TicketsService {
   }
 
   async scanTicket(qrData: string, scannedBy?: string) {
-    await this.initDB();
-
-    let ticketNumber: string;
-
-    // Try JSON parse first; if it fails, treat qrData as a plain ticket number
-    try {
-      const parsed = JSON.parse(qrData);
-      ticketNumber = parsed.ticket;
-    } catch {
-      // Plain ticket number entered manually
-      ticketNumber = qrData.trim().toUpperCase();
-    }
-
-    if (!ticketNumber) {
-      throw new BadRequestException('Invalid QR code — ticket number missing');
-    }
-
-    const { rows } = await this.pool.query(
-      'SELECT * FROM tickets WHERE ticket_number = $1',
-      [ticketNumber]
-    );
-
-    if (rows.length === 0) {
-      throw new NotFoundException(`Ticket ${ticketNumber} not found`);
-    }
-
-    const ticket = rows[0];
-
-    if (ticket.status === 'used') {
-      return {
-        success: false,
-        alreadyUsed: true,
-        ticket: {
-          ticket_number: ticket.ticket_number,
-          status: ticket.status,
-          scanned_at: ticket.scanned_at,
-          scanned_by: ticket.scanned_by,
-        },
-        message: `Ticket ${ticketNumber} was already used at ${new Date(ticket.scanned_at).toLocaleString()}`,
-      };
-    }
-
-    await this.pool.query(
-      `UPDATE tickets SET status = 'used', scanned_at = NOW(), scanned_by = $1 WHERE ticket_number = $2`,
-      [scannedBy || 'Volunteer', ticketNumber]
-    );
-
-    return {
-      success: true,
-      alreadyUsed: false,
-      ticket: {
-        ticket_number: ticket.ticket_number,
-        event_name: ticket.event_name,
-        event_place: ticket.event_place,
-        event_date: ticket.event_date,
-        event_time: ticket.event_time,
-      },
-      message: `Welcome! Ticket ${ticketNumber} validated successfully.`,
-    };
+    const ticketNumber = this.extractTicketNumber(qrData);
+    return this.recordEntry(ticketNumber, scannedBy);
   }
 
   async exportTicketsPDF(): Promise<Buffer> {
@@ -458,6 +401,97 @@ export class TicketsService {
     );
     if (rows.length === 0) throw new NotFoundException('Ticket not found');
     return rows[0];
+  }
+
+  private extractTicketNumber(input: string): string {
+    let ticketNumber: string | undefined;
+    try {
+      const parsed = JSON.parse(input);
+      ticketNumber = parsed.ticket;
+    } catch {
+      ticketNumber = input;
+    }
+    const normalized = ticketNumber?.trim().toUpperCase();
+    if (!normalized) {
+      throw new BadRequestException('Invalid QR code — ticket number missing');
+    }
+    return normalized;
+  }
+
+  async validateTicket(ticketNumber: string) {
+    if (!ticketNumber) {
+      throw new BadRequestException('Ticket number is required');
+    }
+    const ticket = await this.getTicketByNumber(ticketNumber);
+
+    if (ticket.status === 'used') {
+      return {
+        success: false,
+        alreadyUsed: true,
+        ticket: {
+          ticket_number: ticket.ticket_number,
+          status: ticket.status,
+          scanned_at: ticket.scanned_at,
+          scanned_by: ticket.scanned_by,
+        },
+        message: `Ticket ${ticketNumber} was already used at ${new Date(ticket.scanned_at).toLocaleString()}`,
+      };
+    }
+
+    return {
+      success: true,
+      alreadyUsed: false,
+      ticket: {
+        ticket_number: ticket.ticket_number,
+        event_name: ticket.event_name,
+        event_place: ticket.event_place,
+        event_date: ticket.event_date,
+        event_time: ticket.event_time,
+      },
+      message: `Ticket ${ticketNumber} is valid`,
+    };
+  }
+
+  async recordEntry(ticketNumber: string, scannedBy?: string) {
+    if (!ticketNumber) {
+      throw new BadRequestException('Ticket number is required');
+    }
+    const ticket = await this.getTicketByNumber(ticketNumber);
+
+    if (ticket.status === 'used') {
+      return {
+        success: false,
+        alreadyUsed: true,
+        ticket: {
+          ticket_number: ticket.ticket_number,
+          status: ticket.status,
+          scanned_at: ticket.scanned_at,
+          scanned_by: ticket.scanned_by,
+        },
+        message: `Ticket ${ticketNumber} was already used at ${new Date(ticket.scanned_at).toLocaleString()}`,
+      };
+    }
+
+    const { rows } = await this.pool.query(
+      `UPDATE tickets SET status = 'used', scanned_at = NOW(), scanned_by = $1 WHERE ticket_number = $2 RETURNING *`,
+      [scannedBy || 'Volunteer', ticketNumber]
+    );
+    const updated = rows[0];
+
+    return {
+      success: true,
+      alreadyUsed: false,
+      ticket: {
+        ticket_number: updated.ticket_number,
+        event_name: updated.event_name,
+        event_place: updated.event_place,
+        event_date: updated.event_date,
+        event_time: updated.event_time,
+        scanned_at: updated.scanned_at,
+        scanned_by: updated.scanned_by,
+      },
+      message: `Welcome! Ticket ${ticketNumber} validated successfully.`,
+    };
   }
 
   async resetTicket(ticketNumber: string) {

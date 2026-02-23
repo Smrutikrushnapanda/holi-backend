@@ -52,6 +52,25 @@ export class TicketsController {
     return this.ticketsService.getStats();
   }
 
+  // Record entry after validation (volunteer)
+  @Post('entry')
+  @HttpCode(200)
+  async recordEntry(
+    @Body() body: { ticketNumber: string; scannedBy?: string },
+  ) {
+    return this.ticketsService.recordEntry(
+      body.ticketNumber?.toUpperCase(),
+      body.scannedBy,
+    );
+  }
+
+  // Validate ticket by number (volunteer) — must be after specific routes
+  @Post(':ticketNumber')
+  @HttpCode(200)
+  async validateTicket(@Param('ticketNumber') ticketNumber: string) {
+    return this.ticketsService.validateTicket(ticketNumber.toUpperCase());
+  }
+
   // Export all tickets as PDF (admin)
   @Get('export/pdf')
   async exportPDF(@Res() res: Response) {
