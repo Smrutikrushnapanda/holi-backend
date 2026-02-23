@@ -395,6 +395,9 @@ export class TicketsService {
 
   async getTicketByNumber(ticketNumber: string) {
     await this.initDB();
+    if (!ticketNumber) {
+      throw new BadRequestException('Ticket number is required');
+    }
     const normalized = ticketNumber.trim().toUpperCase();
     const { rows } = await this.pool.query(
       'SELECT * FROM tickets WHERE UPPER(ticket_number) = $1',
@@ -469,10 +472,31 @@ export class TicketsService {
       };
     }
 
-    const { rows } = await this.pool.query(
-      `UPDATE tickets SET status = 'used', scanned_at = NOW(), scanned_by = $1 WHERE ticket_number = $2 RETURNING *`,
-      [scannedBy || 'Volunteer', ticketNumber]
+    // Atomically mark as used; if another process updated in between, rowCount will be 0.
+    const { rows, rowCount } = await this.pool.query(
+      `UPDATE tickets
+         SET status = 'used', scanned_at = NOW(), scanned_by = $1
+       WHERE UPPER(ticket_number) = $2 AND status != 'used'
+       RETURNING *`,
+      [scannedBy || 'Volunteer', ticketNumber.toUpperCase()]
     );
+
+    if (rowCount === 0) {
+      // Ticket exists but was just used concurrently
+      const refreshed = await this.getTicketByNumber(ticketNumber);
+      return {
+        success: false,
+        alreadyUsed: true,
+        ticket: {
+          ticket_number: refreshed.ticket_number,
+          status: refreshed.status,
+          scanned_at: refreshed.scanned_at,
+          scanned_by: refreshed.scanned_by,
+        },
+        message: `Ticket ${ticketNumber} was already used at ${new Date(refreshed.scanned_at).toLocaleString()}`,
+      };
+    }
+
     const updated = rows[0];
 
     return {
