@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
 import { TicketsModule } from './tickets/tickets.module';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -9,5 +10,6 @@ import { TicketsModule } from './tickets/tickets.module';
     DatabaseModule,
     TicketsModule,
   ],
+  controllers: [AppController],
 })
 export class AppModule {}
