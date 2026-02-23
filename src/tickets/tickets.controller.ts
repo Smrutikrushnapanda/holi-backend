@@ -56,10 +56,11 @@ export class TicketsController {
   @Post('entry')
   @HttpCode(200)
   async recordEntry(
-    @Body() body: { ticketNumber: string; scannedBy?: string },
+    @Body() body: { ticketNumber?: string; qrData?: string; scannedBy?: string },
+    @Query('ticketNumber') ticketNumberQuery?: string,
   ) {
     return this.ticketsService.recordEntry(
-      body.ticketNumber?.toUpperCase(),
+      body.ticketNumber ?? body.qrData ?? ticketNumberQuery ?? '',
       body.scannedBy,
     );
   }
@@ -68,7 +69,7 @@ export class TicketsController {
   @Post(':ticketNumber')
   @HttpCode(200)
   async validateTicket(@Param('ticketNumber') ticketNumber: string) {
-    return this.ticketsService.validateTicket(ticketNumber.toUpperCase());
+    return this.ticketsService.validateTicket(ticketNumber);
   }
 
   // Export all tickets as PDF (admin)

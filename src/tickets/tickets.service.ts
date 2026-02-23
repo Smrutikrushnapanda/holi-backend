@@ -395,9 +395,10 @@ export class TicketsService {
 
   async getTicketByNumber(ticketNumber: string) {
     await this.initDB();
+    const normalized = ticketNumber.trim().toUpperCase();
     const { rows } = await this.pool.query(
-      'SELECT * FROM tickets WHERE ticket_number = $1',
-      [ticketNumber]
+      'SELECT * FROM tickets WHERE UPPER(ticket_number) = $1',
+      [normalized]
     );
     if (rows.length === 0) throw new NotFoundException('Ticket not found');
     return rows[0];
@@ -411,17 +412,15 @@ export class TicketsService {
     } catch {
       ticketNumber = input;
     }
-    const normalized = ticketNumber?.trim().toUpperCase();
+    const normalized = ticketNumber?.trim();
     if (!normalized) {
       throw new BadRequestException('Invalid QR code — ticket number missing');
     }
     return normalized;
   }
 
-  async validateTicket(ticketNumber: string) {
-    if (!ticketNumber) {
-      throw new BadRequestException('Ticket number is required');
-    }
+  async validateTicket(ticketNumberOrQr: string) {
+    const ticketNumber = this.extractTicketNumber(ticketNumberOrQr);
     const ticket = await this.getTicketByNumber(ticketNumber);
 
     if (ticket.status === 'used') {
@@ -452,10 +451,8 @@ export class TicketsService {
     };
   }
 
-  async recordEntry(ticketNumber: string, scannedBy?: string) {
-    if (!ticketNumber) {
-      throw new BadRequestException('Ticket number is required');
-    }
+  async recordEntry(ticketInput: string, scannedBy?: string) {
+    const ticketNumber = this.extractTicketNumber(ticketInput);
     const ticket = await this.getTicketByNumber(ticketNumber);
 
     if (ticket.status === 'used') {
