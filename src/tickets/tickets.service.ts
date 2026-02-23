@@ -3,11 +3,19 @@ import { Pool } from 'pg';
 import * as QRCode from 'qrcode';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
-const EVENT_NAME = 'Holi Festival 2026';
-const EVENT_PLACE = 'Festival Ground, Bhubaneswar, Odisha';
-const EVENT_DATE = '14th March 2026';
-const EVENT_TIME = '04:00 PM Onwards';
-const ORGANIZER = 'Holi Committee 2026';
+const DEFAULT_EVENT_NAME = 'Holi Festival 2026';
+const DEFAULT_EVENT_PLACE = 'Festival Ground, Bhubaneswar, Odisha';
+const DEFAULT_EVENT_DATE = '14th March 2026';
+const DEFAULT_EVENT_TIME = '04:00 PM Onwards';
+const DEFAULT_ORGANIZER = 'Holi Committee 2026';
+
+export interface EventSettings {
+  eventName: string;
+  eventPlace: string;
+  eventDate: string;
+  eventTime: string;
+  organizer: string;
+}
 
 @Injectable()
 export class TicketsService {
@@ -20,11 +28,11 @@ export class TicketsService {
         ticket_number VARCHAR(20) UNIQUE NOT NULL,
         qr_data TEXT NOT NULL,
         qr_image TEXT NOT NULL,
-        event_name VARCHAR(255) NOT NULL DEFAULT '${EVENT_NAME}',
-        event_place VARCHAR(255) NOT NULL DEFAULT '${EVENT_PLACE}',
-        event_date VARCHAR(100) NOT NULL DEFAULT '${EVENT_DATE}',
-        event_time VARCHAR(100) NOT NULL DEFAULT '${EVENT_TIME}',
-        organizer VARCHAR(255) NOT NULL DEFAULT '${ORGANIZER}',
+        event_name VARCHAR(255) NOT NULL DEFAULT '${DEFAULT_EVENT_NAME}',
+        event_place VARCHAR(255) NOT NULL DEFAULT '${DEFAULT_EVENT_PLACE}',
+        event_date VARCHAR(100) NOT NULL DEFAULT '${DEFAULT_EVENT_DATE}',
+        event_time VARCHAR(100) NOT NULL DEFAULT '${DEFAULT_EVENT_TIME}',
+        organizer VARCHAR(255) NOT NULL DEFAULT '${DEFAULT_ORGANIZER}',
         status VARCHAR(20) NOT NULL DEFAULT 'unused',
         scanned_at TIMESTAMP,
         scanned_by VARCHAR(100),
@@ -36,7 +44,18 @@ export class TicketsService {
   async generateTickets(count: number = 200): Promise<{ generated: number; skipped: number }> {
     await this.initDB();
 
-    // Only count tickets with the HOLI-NNN numeric format
+    // Get current event settings from existing tickets (if any)
+    const { rows: settingsRows } = await this.pool.query(
+      `SELECT event_name, event_place, event_date, event_time, organizer FROM tickets LIMIT 1`
+    );
+    const settings = settingsRows[0] ?? {
+      event_name: DEFAULT_EVENT_NAME,
+      event_place: DEFAULT_EVENT_PLACE,
+      event_date: DEFAULT_EVENT_DATE,
+      event_time: DEFAULT_EVENT_TIME,
+      organizer: DEFAULT_ORGANIZER,
+    };
+
     const { rows: existing } = await this.pool.query(
       `SELECT MAX(CAST(SUBSTRING(ticket_number, 6) AS INTEGER)) as max_num
        FROM tickets
@@ -52,8 +71,8 @@ export class TicketsService {
       const ticketNumber = `HOLI-${String(i).padStart(3, '0')}`;
       const qrData = JSON.stringify({
         ticket: ticketNumber,
-        event: EVENT_NAME,
-        date: EVENT_DATE,
+        event: settings.event_name,
+        date: settings.event_date,
         secret: Buffer.from(`${ticketNumber}:holi2026secret`).toString('base64'),
       });
 
@@ -69,7 +88,9 @@ export class TicketsService {
           `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (ticket_number) DO NOTHING`,
-          [ticketNumber, qrData, qrImage, EVENT_NAME, EVENT_PLACE, EVENT_DATE, EVENT_TIME, ORGANIZER]
+          [ticketNumber, qrData, qrImage,
+           settings.event_name, settings.event_place, settings.event_date,
+           settings.event_time, settings.organizer]
         );
         generated++;
       } catch {
@@ -131,15 +152,57 @@ export class TicketsService {
     };
   }
 
+  async getEventSettings(): Promise<EventSettings> {
+    await this.initDB();
+    const { rows } = await this.pool.query(
+      `SELECT event_name, event_place, event_date, event_time, organizer FROM tickets ORDER BY id ASC LIMIT 1`
+    );
+    if (rows.length === 0) {
+      return {
+        eventName: DEFAULT_EVENT_NAME,
+        eventPlace: DEFAULT_EVENT_PLACE,
+        eventDate: DEFAULT_EVENT_DATE,
+        eventTime: DEFAULT_EVENT_TIME,
+        organizer: DEFAULT_ORGANIZER,
+      };
+    }
+    return {
+      eventName: rows[0].event_name,
+      eventPlace: rows[0].event_place,
+      eventDate: rows[0].event_date,
+      eventTime: rows[0].event_time,
+      organizer: rows[0].organizer,
+    };
+  }
+
+  async updateEventSettings(settings: Partial<EventSettings>): Promise<void> {
+    await this.initDB();
+    const updates: string[] = [];
+    const values: string[] = [];
+    let idx = 1;
+
+    if (settings.eventName !== undefined) { updates.push(`event_name = $${idx++}`); values.push(settings.eventName); }
+    if (settings.eventPlace !== undefined) { updates.push(`event_place = $${idx++}`); values.push(settings.eventPlace); }
+    if (settings.eventDate !== undefined) { updates.push(`event_date = $${idx++}`); values.push(settings.eventDate); }
+    if (settings.eventTime !== undefined) { updates.push(`event_time = $${idx++}`); values.push(settings.eventTime); }
+    if (settings.organizer !== undefined) { updates.push(`organizer = $${idx++}`); values.push(settings.organizer); }
+
+    if (updates.length === 0) return;
+    await this.pool.query(`UPDATE tickets SET ${updates.join(', ')}`, values);
+  }
+
   async scanTicket(qrData: string, scannedBy?: string) {
     await this.initDB();
 
     let ticketNumber: string;
+
+    // Try JSON parse first; if it fails, treat qrData as a plain ticket number
     try {
       const parsed = JSON.parse(qrData);
       ticketNumber = parsed.ticket;
     } catch {
-      throw new BadRequestException('Invalid QR code format');
+      // Plain ticket number entered manually
+      ticketNumber = qrData.trim().toUpperCase();
     }
 
     if (!ticketNumber) {
@@ -193,154 +256,193 @@ export class TicketsService {
   async exportTicketsPDF(): Promise<Buffer> {
     await this.initDB();
     const { rows } = await this.pool.query(
-      'SELECT ticket_number, qr_image, event_name, event_place, event_date, event_time, status FROM tickets ORDER BY id ASC'
+      'SELECT ticket_number, qr_image, event_name, event_place, event_date, event_time, organizer, status FROM tickets ORDER BY id ASC'
     );
 
     const pdfDoc = await PDFDocument.create();
-    const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    const TICKETS_PER_PAGE = 4;
+    // ── Layout constants ──────────────────────────────────────────
+    const TICKETS_PER_PAGE = 6;
     const PAGE_WIDTH = 595;
     const PAGE_HEIGHT = 842;
-    const CARD_WIDTH = 260;
-    const CARD_HEIGHT = 180;
-    const MARGIN = 20;
-    const QR_SIZE = 100;
+    const HEADER_H = 40;          // top page header band
 
-    const cols = 2;
-    const rows_per_page = 2;
+    const COLS = 2;
+    const ROWS_PER_PAGE = 3;
 
-    const colPositions = [MARGIN + 10, PAGE_WIDTH / 2 + MARGIN / 2];
-    const rowPositions = [
-      PAGE_HEIGHT - MARGIN - CARD_HEIGHT - 40,
-      PAGE_HEIGHT - MARGIN - CARD_HEIGHT * 2 - 80,
-    ];
+    const MARGIN_X = 20;
+    const MARGIN_TOP = 12;         // below page header
+    const MARGIN_BOT = 12;
+    const GAP_X = 15;
+    const GAP_Y = 10;
+
+    const CARD_W = Math.floor((PAGE_WIDTH - MARGIN_X * 2 - GAP_X) / COLS);  // 270
+    const AVAILABLE_H = PAGE_HEIGHT - HEADER_H - MARGIN_TOP - MARGIN_BOT;
+    const CARD_H = Math.floor((AVAILABLE_H - GAP_Y * (ROWS_PER_PAGE - 1)) / ROWS_PER_PAGE);  // ~244
+
+    const COL_X = [MARGIN_X, MARGIN_X + CARD_W + GAP_X];
+
+    // Row y = bottom of card (pdf-lib origin is bottom-left)
+    const ROW_Y: number[] = [];
+    for (let r = 0; r < ROWS_PER_PAGE; r++) {
+      // top row first
+      ROW_Y.push(PAGE_HEIGHT - HEADER_H - MARGIN_TOP - CARD_H - r * (CARD_H + GAP_Y));
+    }
+
+    // Festive Holi color palette
+    const C_ORANGE  = rgb(0.98, 0.45, 0.08);
+    const C_PINK    = rgb(0.95, 0.20, 0.55);
+    const C_PURPLE  = rgb(0.52, 0.22, 0.80);
+    const C_GREEN   = rgb(0.10, 0.68, 0.32);
+    const C_YELLOW  = rgb(0.98, 0.80, 0.02);
+    const C_CYAN    = rgb(0.05, 0.65, 0.80);
+    const C_WHITE   = rgb(1, 1, 1);
+    const C_DARK    = rgb(0.12, 0.08, 0.25);
+    const C_GRAY    = rgb(0.45, 0.45, 0.50);
+    const C_LGRAY   = rgb(0.93, 0.93, 0.95);
+    const C_USED    = rgb(0.88, 0.15, 0.15);
+
+    const BAND_COLORS = [C_ORANGE, C_PINK, C_PURPLE, C_GREEN, C_YELLOW, C_CYAN];
+    const DOT_COLORS  = [C_PINK, C_YELLOW, C_GREEN, C_CYAN, C_PURPLE, C_ORANGE];
+
+    const CARD_STRIP_H = 30;       // header strip height
+    const QR_SIZE = 108;
 
     for (let i = 0; i < rows.length; i++) {
       const pageIndex = Math.floor(i / TICKETS_PER_PAGE);
-      const posOnPage = i % TICKETS_PER_PAGE;
-      const col = posOnPage % cols;
-      const row = Math.floor(posOnPage / cols);
+      const pos       = i % TICKETS_PER_PAGE;
+      const col       = pos % COLS;
+      const row       = Math.floor(pos / COLS);
 
-      if (posOnPage === 0) {
-        const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      // ── Add page on first ticket of each page ──
+      if (pos === 0) {
+        const pg = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
 
-        // Page header
-        page.drawRectangle({
-          x: 0,
-          y: PAGE_HEIGHT - 40,
-          width: PAGE_WIDTH,
-          height: 40,
-          color: rgb(0.98, 0.36, 0.1),
+        // Page header: multi-color bands
+        const bandW = PAGE_WIDTH / BAND_COLORS.length;
+        BAND_COLORS.forEach((c, bi) => {
+          pg.drawRectangle({ x: bi * bandW, y: PAGE_HEIGHT - HEADER_H, width: bandW + 1, height: HEADER_H, color: c });
         });
-        page.drawText('HOLI FESTIVAL 2026 — ENTRY TICKETS', {
-          x: 100,
-          y: PAGE_HEIGHT - 28,
-          size: 14,
-          font,
-          color: rgb(1, 1, 1),
+        pg.drawText('HOLI FESTIVAL 2026  ·  ENTRY TICKETS', {
+          x: 130, y: PAGE_HEIGHT - 26, size: 13, font: boldFont, color: C_WHITE,
         });
       }
 
-      const page = pdfDoc.getPage(pageIndex);
-      const x = colPositions[col];
-      const y = rowPositions[row];
+      const pg = pdfDoc.getPage(pageIndex);
+      const x  = COL_X[col];
+      const y  = ROW_Y[row];
 
-      // Card background
-      page.drawRectangle({
-        x,
-        y,
-        width: CARD_WIDTH,
-        height: CARD_HEIGHT,
-        color: rgb(0.98, 0.98, 0.98),
-        borderColor: rgb(0.85, 0.3, 0.1),
+      // ── Card background ──────────────────────────────────────
+      pg.drawRectangle({
+        x, y, width: CARD_W, height: CARD_H,
+        color: C_LGRAY,
+        borderColor: BAND_COLORS[pos % BAND_COLORS.length],
         borderWidth: 2,
       });
 
-      // Ticket header strip
-      page.drawRectangle({
-        x,
-        y: y + CARD_HEIGHT - 30,
-        width: CARD_WIDTH,
-        height: 30,
-        color: rgb(0.98, 0.36, 0.1),
-      });
-
-      page.drawText(EVENT_NAME.toUpperCase(), {
-        x: x + 8,
-        y: y + CARD_HEIGHT - 20,
-        size: 9,
-        font,
-        color: rgb(1, 1, 1),
-      });
-
-      // Ticket number
-      page.drawText(rows[i].ticket_number, {
-        x: x + 8,
-        y: y + CARD_HEIGHT - 50,
-        size: 14,
-        font,
-        color: rgb(0.15, 0.1, 0.4),
-      });
-
-      // Status badge
-      const statusColor = rows[i].status === 'used' ? rgb(0.9, 0.2, 0.2) : rgb(0.1, 0.7, 0.3);
-      page.drawText(rows[i].status.toUpperCase(), {
-        x: x + CARD_WIDTH - 55,
-        y: y + CARD_HEIGHT - 50,
-        size: 8,
-        font,
-        color: statusColor,
-      });
-
-      // Event details (text)
-      const details = [
-        `Date: ${rows[i].event_date}`,
-        `Time: ${rows[i].event_time}`,
-        `Venue: ${EVENT_PLACE.split(',')[0]}`,
-        `Odisha`,
-      ];
-      details.forEach((line, idx) => {
-        page.drawText(line, {
-          x: x + 8,
-          y: y + CARD_HEIGHT - 68 - idx * 14,
-          size: 7.5,
-          font: regularFont,
-          color: rgb(0.2, 0.2, 0.2),
+      // ── Colorful header strip (5 color bands) ────────────────
+      const stripBandW = CARD_W / 5;
+      const stripColors = [C_ORANGE, C_PINK, C_PURPLE, C_GREEN, C_YELLOW];
+      stripColors.forEach((c, bi) => {
+        pg.drawRectangle({
+          x: x + bi * stripBandW,
+          y: y + CARD_H - CARD_STRIP_H,
+          width: stripBandW + 1,
+          height: CARD_STRIP_H,
+          color: c,
         });
       });
 
-      // QR code
-      try {
-        const qrBase64 = rows[i].qr_image.replace('data:image/png;base64,', '');
-        const qrBytes = Buffer.from(qrBase64, 'base64');
-        const qrEmbedded = await pdfDoc.embedPng(qrBytes);
-        page.drawImage(qrEmbedded, {
-          x: x + CARD_WIDTH - QR_SIZE - 10,
-          y: y + 10,
-          width: QR_SIZE,
-          height: QR_SIZE,
+      // Event name in strip
+      pg.drawText(rows[i].event_name.toUpperCase(), {
+        x: x + 8, y: y + CARD_H - CARD_STRIP_H + 10,
+        size: 8.5, font: boldFont, color: C_WHITE,
+      });
+
+      // ── Ticket number ─────────────────────────────────────────
+      pg.drawText(rows[i].ticket_number, {
+        x: x + 8, y: y + CARD_H - CARD_STRIP_H - 18,
+        size: 15, font: boldFont, color: C_DARK,
+      });
+
+      // ── USED stamp (only for used tickets) ───────────────────
+      if (rows[i].status === 'used') {
+        pg.drawText('● USED', {
+          x: x + CARD_W - 50, y: y + CARD_H - CARD_STRIP_H - 18,
+          size: 8, font: boldFont, color: C_USED,
         });
-      } catch {
-        // QR embed failed silently
       }
 
-      // Divider line
-      page.drawLine({
-        start: { x: x + CARD_WIDTH - QR_SIZE - 18, y: y + 10 },
-        end: { x: x + CARD_WIDTH - QR_SIZE - 18, y: y + CARD_HEIGHT - 32 },
-        thickness: 0.5,
-        color: rgb(0.8, 0.8, 0.8),
+      // ── Event details (text on left) ──────────────────────────
+      const textX = x + 8;
+      const details: Array<{ label: string; value: string; color: typeof C_ORANGE }> = [
+        { label: 'Date',   value: rows[i].event_date,         color: C_ORANGE },
+        { label: 'Time',   value: rows[i].event_time,         color: C_PINK   },
+        { label: 'Venue',  value: rows[i].event_place.split(',')[0], color: C_PURPLE },
+        { label: 'City',   value: rows[i].event_place.split(',').slice(1).join(',').trim() || 'Odisha', color: C_GREEN  },
+        { label: 'By',     value: rows[i].organizer,          color: C_CYAN   },
+      ];
+
+      details.forEach((d, di) => {
+        const lineY = y + CARD_H - CARD_STRIP_H - 36 - di * 14;
+        // Colored dot bullet
+        pg.drawEllipse({ x: textX + 3, y: lineY + 3, xScale: 3, yScale: 3, color: d.color });
+        pg.drawText(`${d.label}:`, {
+          x: textX + 10, y: lineY,
+          size: 6.5, font: boldFont, color: C_GRAY,
+        });
+        pg.drawText(d.value, {
+          x: textX + 10, y: lineY - 8,
+          size: 7, font: regularFont, color: C_DARK,
+        });
       });
 
-      // Footer
-      page.drawText('Valid for one entry only • Non-transferable', {
-        x: x + 8,
-        y: y + 6,
-        size: 6,
-        font: regularFont,
-        color: rgb(0.5, 0.5, 0.5),
+      // ── Vertical divider ─────────────────────────────────────
+      const divX = x + CARD_W - QR_SIZE - 14;
+      pg.drawLine({
+        start: { x: divX, y: y + 8 },
+        end:   { x: divX, y: y + CARD_H - CARD_STRIP_H - 4 },
+        thickness: 0.5,
+        color: rgb(0.78, 0.78, 0.82),
+      });
+
+      // ── QR code ───────────────────────────────────────────────
+      try {
+        const qrBase64 = rows[i].qr_image.replace('data:image/png;base64,', '');
+        const qrBytes  = Buffer.from(qrBase64, 'base64');
+        const qrEmbed  = await pdfDoc.embedPng(qrBytes);
+        const qrX = x + CARD_W - QR_SIZE - 6;
+        const qrY = y + (CARD_H - CARD_STRIP_H - QR_SIZE) / 2 - 4;
+        pg.drawImage(qrEmbed, { x: qrX, y: qrY, width: QR_SIZE, height: QR_SIZE });
+
+        // Thin border around QR
+        pg.drawRectangle({
+          x: qrX - 2, y: qrY - 2, width: QR_SIZE + 4, height: QR_SIZE + 4,
+          borderColor: rgb(0.82, 0.82, 0.86), borderWidth: 0.5,
+        });
+      } catch {
+        // silent QR embed failure
+      }
+
+      // ── Decorative color dots (holi powder splash feel) ───────
+      const dotData: Array<{ dx: number; dy: number; r: number; c: typeof C_ORANGE; op: number }> = [
+        { dx: 8,           dy: 14,           r: 5, c: DOT_COLORS[0], op: 0.35 },
+        { dx: 18,          dy: 8,            r: 3, c: DOT_COLORS[1], op: 0.30 },
+        { dx: CARD_W - 14, dy: CARD_H - 44,  r: 4, c: DOT_COLORS[2], op: 0.25 },
+        { dx: CARD_W - 6,  dy: CARD_H - 52,  r: 3, c: DOT_COLORS[3], op: 0.20 },
+        { dx: 28,          dy: 12,           r: 2, c: DOT_COLORS[4], op: 0.25 },
+        { dx: 6,           dy: 22,           r: 2, c: DOT_COLORS[5], op: 0.20 },
+      ];
+      dotData.forEach(({ dx, dy, r, c, op }) => {
+        pg.drawEllipse({ x: x + dx, y: y + dy, xScale: r, yScale: r, color: c, opacity: op });
+      });
+
+      // ── Footer ────────────────────────────────────────────────
+      pg.drawText('Valid for one entry only  ·  Non-transferable', {
+        x: x + 8, y: y + 5,
+        size: 5.5, font: regularFont, color: C_GRAY,
       });
     }
 

@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   Param,
   Query,
@@ -61,6 +62,28 @@ export class TicketsController {
       'Content-Length': pdfBuffer.length,
     });
     res.end(pdfBuffer);
+  }
+
+  // Get event settings (admin) — must come BEFORE :ticketNumber
+  @Get('event-settings')
+  async getEventSettings() {
+    return this.ticketsService.getEventSettings();
+  }
+
+  // Update event settings for all tickets (admin)
+  @Patch('event-settings')
+  @HttpCode(200)
+  async updateEventSettings(
+    @Body() body: {
+      eventName?: string;
+      eventPlace?: string;
+      eventDate?: string;
+      eventTime?: string;
+      organizer?: string;
+    },
+  ) {
+    await this.ticketsService.updateEventSettings(body);
+    return { message: 'Event settings updated for all tickets' };
   }
 
   // Get single ticket
