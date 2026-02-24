@@ -1,8 +1,13 @@
 import { NestFactory } from '@nestjs/core';
+import { json, urlencoded } from 'body-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Allow larger payloads for logo/event settings (base64 images)
+  app.use(json({ limit: '15mb' }));
+  app.use(urlencoded({ extended: true, limit: '15mb' }));
 
   app.enableCors({
     origin: '*',
