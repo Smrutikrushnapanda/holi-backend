@@ -54,7 +54,7 @@ export class TicketsService {
     // Ensure logo columns exist for older databases
     await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS left_logo TEXT DEFAULT '${DEFAULT_LEFT_LOGO}'`);
     await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS right_logo TEXT DEFAULT '${DEFAULT_RIGHT_LOGO}'`);
-    await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS event_price VARCHAR(50) NOT NULL DEFAULT '${DEFAULT_EVENT_PRICE}'`);
+    await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS event_price VARCHAR(50) DEFAULT '${DEFAULT_EVENT_PRICE}'`);
   }
 
   async generateTickets(count: number = 200): Promise<{ generated: number; skipped: number }> {
@@ -81,44 +81,54 @@ export class TicketsService {
        WHERE ticket_number ~ '^HOLI-[0-9]+$'`
     );
     const startFrom = (existing[0]?.max_num || 0) + 1;
-    const endAt = startFrom + count - 1;
 
-    let generated = 0;
-    let skipped = 0;
-
-    for (let i = startFrom; i <= endAt; i++) {
-      const ticketNumber = `HOLI-${String(i).padStart(3, '0')}`;
-      const qrData = JSON.stringify({
-        ticket: ticketNumber,
-        event: settings.event_name,
-        date: settings.event_date,
-        secret: Buffer.from(`${ticketNumber}:holi2026secret`).toString('base64'),
-      });
-
-      try {
+    // Generate all QR codes in parallel
+    const ticketRows = await Promise.all(
+      Array.from({ length: count }, async (_, idx) => {
+        const num = startFrom + idx;
+        const ticketNumber = `HOLI-${String(num).padStart(3, '0')}`;
+        const qrData = JSON.stringify({
+          ticket: ticketNumber,
+          event: settings.event_name,
+          date: settings.event_date,
+          secret: Buffer.from(`${ticketNumber}:holi2026secret`).toString('base64'),
+        });
         const qrImage = await QRCode.toDataURL(qrData, {
           width: 300,
           margin: 2,
           color: { dark: '#1a1a2e', light: '#ffffff' },
           errorCorrectionLevel: 'H',
         });
+        return { ticketNumber, qrData, qrImage };
+      })
+    );
 
-        await this.pool.query(
-          `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer, event_price, left_logo, right_logo)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (ticket_number) DO NOTHING`,
-          [ticketNumber, qrData, qrImage,
-           settings.event_name, settings.event_place, settings.event_date,
-           settings.event_time, settings.organizer, settings.event_price,
-           settings.left_logo, settings.right_logo]
+    // Batch insert in groups of 50 to keep query size reasonable
+    const BATCH_SIZE = 50;
+    let generated = 0;
+    for (let i = 0; i < ticketRows.length; i += BATCH_SIZE) {
+      const batch = ticketRows.slice(i, i + BATCH_SIZE);
+      const values: string[] = [];
+      const placeholders = batch.map((ticket, j) => {
+        const base = j * 11;
+        values.push(
+          ticket.ticketNumber, ticket.qrData, ticket.qrImage,
+          settings.event_name, settings.event_place, settings.event_date,
+          settings.event_time, settings.organizer, settings.event_price,
+          settings.left_logo, settings.right_logo,
         );
-        generated++;
-      } catch {
-        skipped++;
-      }
+        return `($${base+1}, $${base+2}, $${base+3}, $${base+4}, $${base+5}, $${base+6}, $${base+7}, $${base+8}, $${base+9}, $${base+10}, $${base+11})`;
+      });
+      const { rowCount } = await this.pool.query(
+        `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer, event_price, left_logo, right_logo)
+         VALUES ${placeholders.join(', ')}
+         ON CONFLICT (ticket_number) DO NOTHING`,
+        values,
+      );
+      generated += rowCount ?? 0;
     }
 
-    return { generated, skipped };
+    return { generated, skipped: count - generated };
   }
 
   async getAllTickets(page = 1, limit = 50, status?: string) {
@@ -415,7 +425,7 @@ export class TicketsService {
         font: regularFont,
         color: C_PINK,
       });
-      pg.drawText(`₹${rows[i].event_price || DEFAULT_EVENT_PRICE}`, {
+      pg.drawText(`Rs.${rows[i].event_price || DEFAULT_EVENT_PRICE}`, {
         x: x + CARD_W - 96,
         y: y + CARD_H - CARD_STRIP_H + 18,
         size: 18,
@@ -460,7 +470,7 @@ export class TicketsService {
         { label: 'Live DJ · Rain Dance · Food · Colours', value: '', color: C_PURPLE },
         { label: 'Date',   value: rows[i].event_date, color: C_ORANGE },
         { label: 'Time',   value: rows[i].event_time, color: C_PINK },
-        { label: 'Price',  value: `₹${rows[i].event_price || DEFAULT_EVENT_PRICE}`, color: C_ORANGE },
+        { label: 'Price',  value: `Rs.${rows[i].event_price || DEFAULT_EVENT_PRICE}`, color: C_ORANGE },
         { label: 'Address', value: rows[i].event_place, color: C_GREEN },
         { label: 'Organizer', value: rows[i].organizer, color: C_CYAN },
       ];
