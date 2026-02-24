@@ -18,8 +18,9 @@ async function bootstrap() {
   // Keep /api/* prefixed while allowing bare '/' for a simple health check
   app.setGlobalPrefix('api', { exclude: [''] });
 
-  const port = process.env.PORT || 5000;
-  await app.listen(port);
-  console.log(`Holiii Backend running on http://localhost:${port}/api`);
+  const port = Number(process.env.PORT) || 5055;
+  const host = process.env.HOST || '127.0.0.1';
+  await app.listen(port, host);
+  console.log(`Holiii Backend running on http://${host}:${port}/api`);
 }
 bootstrap();
