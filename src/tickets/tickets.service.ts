@@ -364,8 +364,8 @@ export class TicketsService {
       const rightLogo = rows[i].right_logo;
       // Allow independent sizing for left/right logos
       const logoPadding = 8;
-      const leftLogoSize = { w: 62, h: 62 };
-      const rightLogoSize = { w: 80, h: 58 }; // wider as requested
+      const leftLogoSize = { w: 62, h: 58 };
+      const rightLogoSize = { w: 85, h: 54 }; // wider as requested
 
       const leftEmbed = await embedLogo(leftLogo);
       if (leftEmbed) {
