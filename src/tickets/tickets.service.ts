@@ -8,6 +8,7 @@ const DEFAULT_EVENT_PLACE = 'Harapur,Near GD Goenka School,In front of DN Fairyt
 const DEFAULT_EVENT_DATE = '4th March 2026';
 const DEFAULT_EVENT_TIME = '10:00 AM Onwards';
 const DEFAULT_ORGANIZER = 'KALINGA BEATS';
+const DEFAULT_EVENT_PRICE = '999';
 
 // Optional brand marks placed on the ticket header (data URLs)
 const DEFAULT_LEFT_LOGO = '';
@@ -19,6 +20,7 @@ export interface EventSettings {
   eventDate: string;
   eventTime: string;
   organizer: string;
+  eventPrice?: string;
   leftLogo?: string;
   rightLogo?: string;
 }
@@ -39,6 +41,7 @@ export class TicketsService {
         event_date VARCHAR(100) NOT NULL DEFAULT '${DEFAULT_EVENT_DATE}',
         event_time VARCHAR(100) NOT NULL DEFAULT '${DEFAULT_EVENT_TIME}',
         organizer VARCHAR(255) NOT NULL DEFAULT '${DEFAULT_ORGANIZER}',
+        event_price VARCHAR(50) NOT NULL DEFAULT '${DEFAULT_EVENT_PRICE}',
         status VARCHAR(20) NOT NULL DEFAULT 'unused',
         scanned_at TIMESTAMP,
         scanned_by VARCHAR(100),
@@ -51,6 +54,7 @@ export class TicketsService {
     // Ensure logo columns exist for older databases
     await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS left_logo TEXT DEFAULT '${DEFAULT_LEFT_LOGO}'`);
     await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS right_logo TEXT DEFAULT '${DEFAULT_RIGHT_LOGO}'`);
+    await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS event_price VARCHAR(50) NOT NULL DEFAULT '${DEFAULT_EVENT_PRICE}'`);
   }
 
   async generateTickets(count: number = 200): Promise<{ generated: number; skipped: number }> {
@@ -58,7 +62,7 @@ export class TicketsService {
 
     // Get current event settings from existing tickets (if any)
     const { rows: settingsRows } = await this.pool.query(
-      `SELECT event_name, event_place, event_date, event_time, organizer, left_logo, right_logo FROM tickets LIMIT 1`
+      `SELECT event_name, event_place, event_date, event_time, organizer, event_price, left_logo, right_logo FROM tickets LIMIT 1`
     );
     const settings = settingsRows[0] ?? {
       event_name: DEFAULT_EVENT_NAME,
@@ -66,6 +70,7 @@ export class TicketsService {
       event_date: DEFAULT_EVENT_DATE,
       event_time: DEFAULT_EVENT_TIME,
       organizer: DEFAULT_ORGANIZER,
+      event_price: DEFAULT_EVENT_PRICE,
       left_logo: DEFAULT_LEFT_LOGO,
       right_logo: DEFAULT_RIGHT_LOGO,
     };
@@ -99,12 +104,13 @@ export class TicketsService {
         });
 
         await this.pool.query(
-          `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer, left_logo, right_logo)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer, event_price, left_logo, right_logo)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (ticket_number) DO NOTHING`,
           [ticketNumber, qrData, qrImage,
            settings.event_name, settings.event_place, settings.event_date,
-           settings.event_time, settings.organizer, settings.left_logo, settings.right_logo]
+           settings.event_time, settings.organizer, settings.event_price,
+           settings.left_logo, settings.right_logo]
         );
         generated++;
       } catch {
@@ -169,7 +175,7 @@ export class TicketsService {
   async getEventSettings(): Promise<EventSettings> {
     await this.initDB();
     const { rows } = await this.pool.query(
-      `SELECT event_name, event_place, event_date, event_time, organizer, left_logo, right_logo FROM tickets ORDER BY id ASC LIMIT 1`
+      `SELECT event_name, event_place, event_date, event_time, organizer, event_price, left_logo, right_logo FROM tickets ORDER BY id ASC LIMIT 1`
     );
     if (rows.length === 0) {
       return {
@@ -178,6 +184,7 @@ export class TicketsService {
         eventDate: DEFAULT_EVENT_DATE,
         eventTime: DEFAULT_EVENT_TIME,
         organizer: DEFAULT_ORGANIZER,
+        eventPrice: DEFAULT_EVENT_PRICE,
         leftLogo: DEFAULT_LEFT_LOGO,
         rightLogo: DEFAULT_RIGHT_LOGO,
       };
@@ -188,6 +195,7 @@ export class TicketsService {
       eventDate: rows[0].event_date,
       eventTime: rows[0].event_time,
       organizer: rows[0].organizer,
+      eventPrice: rows[0].event_price,
       leftLogo: rows[0].left_logo,
       rightLogo: rows[0].right_logo,
     };
@@ -204,6 +212,7 @@ export class TicketsService {
     if (settings.eventDate !== undefined) { updates.push(`event_date = $${idx++}`); values.push(settings.eventDate); }
     if (settings.eventTime !== undefined) { updates.push(`event_time = $${idx++}`); values.push(settings.eventTime); }
     if (settings.organizer !== undefined) { updates.push(`organizer = $${idx++}`); values.push(settings.organizer); }
+    if (settings.eventPrice !== undefined) { updates.push(`event_price = $${idx++}`); values.push(settings.eventPrice); }
     if (settings.leftLogo !== undefined) { updates.push(`left_logo = $${idx++}`); values.push(settings.leftLogo); }
     if (settings.rightLogo !== undefined) { updates.push(`right_logo = $${idx++}`); values.push(settings.rightLogo); }
 
@@ -219,7 +228,7 @@ export class TicketsService {
   async exportTicketsPDF(): Promise<Buffer> {
     await this.initDB();
     const { rows } = await this.pool.query(
-      'SELECT ticket_number, qr_image, event_name, event_place, event_date, event_time, organizer, status, left_logo, right_logo FROM tickets ORDER BY id ASC'
+      'SELECT ticket_number, qr_image, event_name, event_place, event_date, event_time, organizer, event_price, status, left_logo, right_logo FROM tickets ORDER BY id ASC'
     );
 
     const pdfDoc = await PDFDocument.create();
@@ -364,8 +373,8 @@ export class TicketsService {
       const rightLogo = rows[i].right_logo;
       // Allow independent sizing for left/right logos
       const logoPadding = 8;
-      const leftLogoSize = { w: 62, h: 58 };
-      const rightLogoSize = { w: 85, h: 54 }; // wider as requested
+      const leftLogoSize = { w: 62, h: 56 };
+      const rightLogoSize = { w: 85, h: 50 }; // wider as requested
 
       const leftEmbed = await embedLogo(leftLogo);
       if (leftEmbed) {
@@ -387,7 +396,7 @@ export class TicketsService {
         });
       }
 
-      // Title in header
+      // Title in header + price tag
       pg.drawText('Holi Hai!', {
         x: headerCenterX - 54,
         y: y + CARD_H - CARD_STRIP_H + 20,
@@ -401,6 +410,13 @@ export class TicketsService {
         size: 9,
         font: regularFont,
         color: C_PINK,
+      });
+      pg.drawText(`₹${rows[i].event_price || DEFAULT_EVENT_PRICE}`, {
+        x: x + CARD_W - 96,
+        y: y + CARD_H - CARD_STRIP_H + 18,
+        size: 18,
+        font: boldFont,
+        color: C_ORANGE,
       });
 
       // ── Ticket number & used badge ──────────────────────────
@@ -440,6 +456,7 @@ export class TicketsService {
         { label: 'Live DJ · Rain Dance · Food · Colours', value: '', color: C_PURPLE },
         { label: 'Date',   value: rows[i].event_date, color: C_ORANGE },
         { label: 'Time',   value: rows[i].event_time, color: C_PINK },
+        { label: 'Price',  value: `₹${rows[i].event_price || DEFAULT_EVENT_PRICE}`, color: C_ORANGE },
         { label: 'Address', value: rows[i].event_place, color: C_GREEN },
         { label: 'Organizer', value: rows[i].organizer, color: C_CYAN },
       ];

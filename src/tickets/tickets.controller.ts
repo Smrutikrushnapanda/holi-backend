@@ -100,6 +100,7 @@ export class TicketsController {
       eventDate?: string;
       eventTime?: string;
       organizer?: string;
+      eventPrice?: string;
       leftLogo?: string;
       rightLogo?: string;
     },
