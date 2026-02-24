@@ -362,26 +362,28 @@ export class TicketsService {
 
       const leftLogo = rows[i].left_logo;
       const rightLogo = rows[i].right_logo;
-      const logoSize = 52;
+      // Allow independent sizing for left/right logos
       const logoPadding = 8;
+      const leftLogoSize = { w: 62, h: 62 };
+      const rightLogoSize = { w: 80, h: 58 }; // wider as requested
 
       const leftEmbed = await embedLogo(leftLogo);
       if (leftEmbed) {
         pg.drawImage(leftEmbed, {
           x: x + logoPadding,
-          y: y + CARD_H - logoPadding - logoSize,
-          width: logoSize,
-          height: logoSize,
+          y: y + CARD_H - logoPadding - leftLogoSize.h,
+          width: leftLogoSize.w,
+          height: leftLogoSize.h,
         });
       }
 
       const rightEmbed = await embedLogo(rightLogo);
       if (rightEmbed) {
         pg.drawImage(rightEmbed, {
-          x: x + CARD_W - logoPadding - logoSize,
-          y: y + CARD_H - logoPadding - logoSize,
-          width: logoSize,
-          height: logoSize,
+          x: x + CARD_W - logoPadding - rightLogoSize.w,
+          y: y + CARD_H - logoPadding - rightLogoSize.h,
+          width: rightLogoSize.w,
+          height: rightLogoSize.h,
         });
       }
 
