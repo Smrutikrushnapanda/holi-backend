@@ -100,6 +100,8 @@ export class TicketsController {
       eventDate?: string;
       eventTime?: string;
       organizer?: string;
+      leftLogo?: string;
+      rightLogo?: string;
     },
   ) {
     await this.ticketsService.updateEventSettings(body);

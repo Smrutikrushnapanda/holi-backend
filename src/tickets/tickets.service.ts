@@ -3,11 +3,15 @@ import { Pool } from 'pg';
 import * as QRCode from 'qrcode';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
-const DEFAULT_EVENT_NAME = 'Holi Festival 2026';
-const DEFAULT_EVENT_PLACE = 'Festival Ground, Bhubaneswar, Odisha';
-const DEFAULT_EVENT_DATE = '14th March 2026';
-const DEFAULT_EVENT_TIME = '04:00 PM Onwards';
-const DEFAULT_ORGANIZER = 'Holi Committee 2026';
+const DEFAULT_EVENT_NAME = 'Holi Hei! 2026';
+const DEFAULT_EVENT_PLACE = 'Harapur,Near GD Goenka School,In front of DN Fairytale Appartment, Bhubaneswar, Odisha';
+const DEFAULT_EVENT_DATE = '4th March 2026';
+const DEFAULT_EVENT_TIME = '10:00 AM Onwards';
+const DEFAULT_ORGANIZER = 'KALINGA BEATS';
+
+// Optional brand marks placed on the ticket header (data URLs)
+const DEFAULT_LEFT_LOGO = '';
+const DEFAULT_RIGHT_LOGO = '';
 
 export interface EventSettings {
   eventName: string;
@@ -15,6 +19,8 @@ export interface EventSettings {
   eventDate: string;
   eventTime: string;
   organizer: string;
+  leftLogo?: string;
+  rightLogo?: string;
 }
 
 @Injectable()
@@ -36,9 +42,15 @@ export class TicketsService {
         status VARCHAR(20) NOT NULL DEFAULT 'unused',
         scanned_at TIMESTAMP,
         scanned_by VARCHAR(100),
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        left_logo TEXT DEFAULT '${DEFAULT_LEFT_LOGO}',
+        right_logo TEXT DEFAULT '${DEFAULT_RIGHT_LOGO}'
       )
     `);
+
+    // Ensure logo columns exist for older databases
+    await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS left_logo TEXT DEFAULT '${DEFAULT_LEFT_LOGO}'`);
+    await this.pool.query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS right_logo TEXT DEFAULT '${DEFAULT_RIGHT_LOGO}'`);
   }
 
   async generateTickets(count: number = 200): Promise<{ generated: number; skipped: number }> {
@@ -46,7 +58,7 @@ export class TicketsService {
 
     // Get current event settings from existing tickets (if any)
     const { rows: settingsRows } = await this.pool.query(
-      `SELECT event_name, event_place, event_date, event_time, organizer FROM tickets LIMIT 1`
+      `SELECT event_name, event_place, event_date, event_time, organizer, left_logo, right_logo FROM tickets LIMIT 1`
     );
     const settings = settingsRows[0] ?? {
       event_name: DEFAULT_EVENT_NAME,
@@ -54,6 +66,8 @@ export class TicketsService {
       event_date: DEFAULT_EVENT_DATE,
       event_time: DEFAULT_EVENT_TIME,
       organizer: DEFAULT_ORGANIZER,
+      left_logo: DEFAULT_LEFT_LOGO,
+      right_logo: DEFAULT_RIGHT_LOGO,
     };
 
     const { rows: existing } = await this.pool.query(
@@ -85,12 +99,12 @@ export class TicketsService {
         });
 
         await this.pool.query(
-          `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `INSERT INTO tickets (ticket_number, qr_data, qr_image, event_name, event_place, event_date, event_time, organizer, left_logo, right_logo)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (ticket_number) DO NOTHING`,
           [ticketNumber, qrData, qrImage,
            settings.event_name, settings.event_place, settings.event_date,
-           settings.event_time, settings.organizer]
+           settings.event_time, settings.organizer, settings.left_logo, settings.right_logo]
         );
         generated++;
       } catch {
@@ -155,7 +169,7 @@ export class TicketsService {
   async getEventSettings(): Promise<EventSettings> {
     await this.initDB();
     const { rows } = await this.pool.query(
-      `SELECT event_name, event_place, event_date, event_time, organizer FROM tickets ORDER BY id ASC LIMIT 1`
+      `SELECT event_name, event_place, event_date, event_time, organizer, left_logo, right_logo FROM tickets ORDER BY id ASC LIMIT 1`
     );
     if (rows.length === 0) {
       return {
@@ -164,6 +178,8 @@ export class TicketsService {
         eventDate: DEFAULT_EVENT_DATE,
         eventTime: DEFAULT_EVENT_TIME,
         organizer: DEFAULT_ORGANIZER,
+        leftLogo: DEFAULT_LEFT_LOGO,
+        rightLogo: DEFAULT_RIGHT_LOGO,
       };
     }
     return {
@@ -172,6 +188,8 @@ export class TicketsService {
       eventDate: rows[0].event_date,
       eventTime: rows[0].event_time,
       organizer: rows[0].organizer,
+      leftLogo: rows[0].left_logo,
+      rightLogo: rows[0].right_logo,
     };
   }
 
@@ -186,6 +204,8 @@ export class TicketsService {
     if (settings.eventDate !== undefined) { updates.push(`event_date = $${idx++}`); values.push(settings.eventDate); }
     if (settings.eventTime !== undefined) { updates.push(`event_time = $${idx++}`); values.push(settings.eventTime); }
     if (settings.organizer !== undefined) { updates.push(`organizer = $${idx++}`); values.push(settings.organizer); }
+    if (settings.leftLogo !== undefined) { updates.push(`left_logo = $${idx++}`); values.push(settings.leftLogo); }
+    if (settings.rightLogo !== undefined) { updates.push(`right_logo = $${idx++}`); values.push(settings.rightLogo); }
 
     if (updates.length === 0) return;
     await this.pool.query(`UPDATE tickets SET ${updates.join(', ')}`, values);
@@ -199,7 +219,7 @@ export class TicketsService {
   async exportTicketsPDF(): Promise<Buffer> {
     await this.initDB();
     const { rows } = await this.pool.query(
-      'SELECT ticket_number, qr_image, event_name, event_place, event_date, event_time, organizer, status FROM tickets ORDER BY id ASC'
+      'SELECT ticket_number, qr_image, event_name, event_place, event_date, event_time, organizer, status, left_logo, right_logo FROM tickets ORDER BY id ASC'
     );
 
     const pdfDoc = await PDFDocument.create();
@@ -207,25 +227,24 @@ export class TicketsService {
     const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
     // ── Layout constants ──────────────────────────────────────────
-    const TICKETS_PER_PAGE = 6;
+    // Single ticket per page to ensure one-per-row layout
+    const COLS = 1;
+    const ROWS_PER_PAGE = 1;
+    const TICKETS_PER_PAGE = COLS * ROWS_PER_PAGE;
     const PAGE_WIDTH = 595;
     const PAGE_HEIGHT = 842;
-    const HEADER_H = 40;          // top page header band
+    const HEADER_H = 46;          // top page header band
 
-    const COLS = 2;
-    const ROWS_PER_PAGE = 3;
-
-    const MARGIN_X = 20;
+    const MARGIN_X = 18;
     const MARGIN_TOP = 12;         // below page header
     const MARGIN_BOT = 12;
-    const GAP_X = 15;
-    const GAP_Y = 10;
+    const GAP_Y = 12;
 
-    const CARD_W = Math.floor((PAGE_WIDTH - MARGIN_X * 2 - GAP_X) / COLS);  // 270
+    const CARD_W = PAGE_WIDTH - MARGIN_X * 2;  // full width single column
     const AVAILABLE_H = PAGE_HEIGHT - HEADER_H - MARGIN_TOP - MARGIN_BOT;
-    const CARD_H = Math.floor((AVAILABLE_H - GAP_Y * (ROWS_PER_PAGE - 1)) / ROWS_PER_PAGE);  // ~244
+    const CARD_H = Math.floor((AVAILABLE_H - GAP_Y * (ROWS_PER_PAGE - 1)) / ROWS_PER_PAGE);  // taller cards
 
-    const COL_X = [MARGIN_X, MARGIN_X + CARD_W + GAP_X];
+    const COL_X = [MARGIN_X];
 
     // Row y = bottom of card (pdf-lib origin is bottom-left)
     const ROW_Y: number[] = [];
@@ -250,8 +269,48 @@ export class TicketsService {
     const BAND_COLORS = [C_ORANGE, C_PINK, C_PURPLE, C_GREEN, C_YELLOW, C_CYAN];
     const DOT_COLORS  = [C_PINK, C_YELLOW, C_GREEN, C_CYAN, C_PURPLE, C_ORANGE];
 
-    const CARD_STRIP_H = 30;       // header strip height
-    const QR_SIZE = 108;
+    const CARD_STRIP_H = 62;       // header strip height
+    const QR_SIZE = 120;
+
+    // Memoized logo embeds
+    const logoCache = new Map<string, any>();
+
+    async function embedLogo(dataUrl?: string) {
+      if (!dataUrl) return null;
+      if (logoCache.has(dataUrl)) return logoCache.get(dataUrl);
+      try {
+        const match = dataUrl.match(/^data:image\/(png|jpe?g);base64,(.*)$/i);
+        if (!match) return null;
+        const mime = match[1].toLowerCase();
+        const bytes = Buffer.from(match[2], 'base64');
+        const embed = mime === 'png'
+          ? await pdfDoc.embedPng(bytes)
+          : await pdfDoc.embedJpg(bytes);
+        logoCache.set(dataUrl, embed);
+        return embed;
+      } catch {
+        return null;
+      }
+    }
+
+    function wrapText(text: string, font: any, fontSize: number, maxWidth: number): string[] {
+      const cleaned = (text || '').replace(/\s+/g, ' ').trim();
+      if (!cleaned) return ['-'];
+      const words = cleaned.split(' ');
+      const lines: string[] = [];
+      let current = '';
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+          current = candidate;
+        } else {
+          if (current) lines.push(current);
+          current = word;
+        }
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
 
     for (let i = 0; i < rows.length; i++) {
       const pageIndex = Math.floor(i / TICKETS_PER_PAGE);
@@ -269,7 +328,7 @@ export class TicketsService {
           pg.drawRectangle({ x: bi * bandW, y: PAGE_HEIGHT - HEADER_H, width: bandW + 1, height: HEADER_H, color: c });
         });
         pg.drawText('HOLI FESTIVAL 2026  ·  ENTRY TICKETS', {
-          x: 130, y: PAGE_HEIGHT - 26, size: 13, font: boldFont, color: C_WHITE,
+          x: 152, y: PAGE_HEIGHT - 28, size: 13, font: boldFont, color: C_WHITE,
         });
       }
 
@@ -281,111 +340,179 @@ export class TicketsService {
       pg.drawRectangle({
         x, y, width: CARD_W, height: CARD_H,
         color: C_LGRAY,
-        borderColor: BAND_COLORS[pos % BAND_COLORS.length],
+        borderColor: C_PINK,
         borderWidth: 2,
+        opacity: 0.98,
       });
 
-      // ── Colorful header strip (5 color bands) ────────────────
-      const stripBandW = CARD_W / 5;
-      const stripColors = [C_ORANGE, C_PINK, C_PURPLE, C_GREEN, C_YELLOW];
-      stripColors.forEach((c, bi) => {
-        pg.drawRectangle({
-          x: x + bi * stripBandW,
-          y: y + CARD_H - CARD_STRIP_H,
-          width: stripBandW + 1,
-          height: CARD_STRIP_H,
-          color: c,
-        });
+      // ── Header strip with two logos ───────────────────────────
+      pg.drawRectangle({
+        x, y: y + CARD_H - CARD_STRIP_H,
+        width: CARD_W, height: CARD_STRIP_H,
+        color: C_WHITE,
       });
 
-      // Event name in strip
-      pg.drawText(rows[i].event_name.toUpperCase(), {
-        x: x + 8, y: y + CARD_H - CARD_STRIP_H + 10,
-        size: 8.5, font: boldFont, color: C_WHITE,
+      const headerCenterX = x + CARD_W / 2;
+      pg.drawRectangle({
+        x, y: y + CARD_H - CARD_STRIP_H,
+        width: CARD_W, height: CARD_STRIP_H,
+        color: rgb(0.99, 0.90, 0.95),
+        opacity: 0.65,
       });
 
-      // ── Ticket number ─────────────────────────────────────────
-      pg.drawText(rows[i].ticket_number, {
-        x: x + 8, y: y + CARD_H - CARD_STRIP_H - 18,
-        size: 15, font: boldFont, color: C_DARK,
-      });
+      const leftLogo = rows[i].left_logo;
+      const rightLogo = rows[i].right_logo;
+      const logoSize = 38;
+      const logoPadding = 8;
 
-      // ── USED stamp (only for used tickets) ───────────────────
-      if (rows[i].status === 'used') {
-        pg.drawText('● USED', {
-          x: x + CARD_W - 50, y: y + CARD_H - CARD_STRIP_H - 18,
-          size: 8, font: boldFont, color: C_USED,
+      const leftEmbed = await embedLogo(leftLogo);
+      if (leftEmbed) {
+        pg.drawImage(leftEmbed, {
+          x: x + logoPadding,
+          y: y + CARD_H - logoPadding - logoSize,
+          width: logoSize,
+          height: logoSize,
         });
       }
 
-      // ── Event details (text on left) ──────────────────────────
-      const textX = x + 8;
-      const details: Array<{ label: string; value: string; color: typeof C_ORANGE }> = [
-        { label: 'Date',   value: rows[i].event_date,         color: C_ORANGE },
-        { label: 'Time',   value: rows[i].event_time,         color: C_PINK   },
-        { label: 'Venue',  value: rows[i].event_place.split(',')[0], color: C_PURPLE },
-        { label: 'City',   value: rows[i].event_place.split(',').slice(1).join(',').trim() || 'Odisha', color: C_GREEN  },
-        { label: 'By',     value: rows[i].organizer,          color: C_CYAN   },
+      const rightEmbed = await embedLogo(rightLogo);
+      if (rightEmbed) {
+        pg.drawImage(rightEmbed, {
+          x: x + CARD_W - logoPadding - logoSize,
+          y: y + CARD_H - logoPadding - logoSize,
+          width: logoSize,
+          height: logoSize,
+        });
+      }
+
+      // Title in header
+      pg.drawText('Holi Hai!', {
+        x: headerCenterX - 56,
+        y: y + CARD_H - CARD_STRIP_H + 24,
+        size: 20,
+        font: boldFont,
+        color: C_PURPLE,
+      });
+      pg.drawText('Celebrate with us', {
+        x: headerCenterX - 52,
+        y: y + CARD_H - CARD_STRIP_H + 10,
+        size: 10,
+        font: regularFont,
+        color: C_PINK,
+      });
+
+      // ── Ticket number & used badge ──────────────────────────
+      pg.drawText(rows[i].ticket_number, {
+        x: x + 14,
+        y: y + CARD_H - CARD_STRIP_H - 18,
+        size: 18,
+        font: boldFont,
+        color: C_DARK,
+      });
+      if (rows[i].status === 'used') {
+        pg.drawText('USED', {
+          x: x + CARD_W - 60,
+          y: y + CARD_H - CARD_STRIP_H - 18,
+          size: 10,
+          font: boldFont,
+          color: C_USED,
+        });
+      }
+
+      // ── Details & QR layout ─────────────────────────────────
+      const contentY = y + 18;
+      const infoBoxWidth = CARD_W - QR_SIZE - 36;
+
+      pg.drawRectangle({
+        x: x + 12,
+        y: contentY,
+        width: infoBoxWidth,
+        height: CARD_H - CARD_STRIP_H - 36,
+        color: rgb(1, 0.98, 0.95),
+        opacity: 0.75,
+        borderColor: rgb(0.99, 0.8, 0.9),
+        borderWidth: 1,
+      });
+
+      const details: Array<{ label: string; value: string; color: ReturnType<typeof rgb> }> = [
+        { label: 'Live DJ · Rain Dance · Food · Colours', value: '', color: C_PURPLE },
+        { label: 'Date',   value: rows[i].event_date, color: C_ORANGE },
+        { label: 'Time',   value: rows[i].event_time, color: C_PINK },
+        { label: 'Address', value: rows[i].event_place, color: C_GREEN },
+        { label: 'Organizer', value: rows[i].organizer, color: C_CYAN },
       ];
 
-      details.forEach((d, di) => {
-        const lineY = y + CARD_H - CARD_STRIP_H - 36 - di * 14;
-        // Colored dot bullet
-        pg.drawEllipse({ x: textX + 3, y: lineY + 3, xScale: 3, yScale: 3, color: d.color });
-        pg.drawText(`${d.label}:`, {
-          x: textX + 10, y: lineY,
-          size: 6.5, font: boldFont, color: C_GRAY,
-        });
-        pg.drawText(d.value, {
-          x: textX + 10, y: lineY - 8,
-          size: 7, font: regularFont, color: C_DARK,
-        });
+      let lineY = y + CARD_H - CARD_STRIP_H - 30;
+      details.forEach((d, idxDetail) => {
+        const labelSize = idxDetail === 0 ? 9 : 8;
+        const valueSize = idxDetail === 0 ? 0 : 10;
+        if (idxDetail === 0) {
+          pg.drawText(d.label, { x: x + 20, y: lineY, size: labelSize, font: boldFont, color: d.color });
+          lineY -= 16;
+          return;
+        }
+        const labelX = x + 20;
+        const valueX = x + 100;
+        const maxValueWidth = infoBoxWidth - (valueX - (x + 12)) - 12;
+        pg.drawText(`${d.label}:`, { x: labelX, y: lineY, size: labelSize, font: boldFont, color: d.color });
+
+        if (d.label === 'Address') {
+          const addressLines = wrapText(d.value, regularFont, valueSize, maxValueWidth).slice(0, 3);
+          addressLines.forEach((line, lineIndex) => {
+            pg.drawText(line, {
+              x: valueX,
+              y: lineY - lineIndex * 12,
+              size: valueSize,
+              font: regularFont,
+              color: C_DARK,
+            });
+          });
+          lineY -= 12 * addressLines.length + 4;
+          return;
+        }
+
+        pg.drawText(d.value || '-', { x: valueX, y: lineY, size: valueSize, font: regularFont, color: C_DARK });
+        lineY -= 16;
       });
 
-      // ── Vertical divider ─────────────────────────────────────
-      const divX = x + CARD_W - QR_SIZE - 14;
-      pg.drawLine({
-        start: { x: divX, y: y + 8 },
-        end:   { x: divX, y: y + CARD_H - CARD_STRIP_H - 4 },
-        thickness: 0.5,
-        color: rgb(0.78, 0.78, 0.82),
-      });
-
-      // ── QR code ───────────────────────────────────────────────
+      // ── QR code box ─────────────────────────────────────────
       try {
         const qrBase64 = rows[i].qr_image.replace('data:image/png;base64,', '');
         const qrBytes  = Buffer.from(qrBase64, 'base64');
         const qrEmbed  = await pdfDoc.embedPng(qrBytes);
-        const qrX = x + CARD_W - QR_SIZE - 6;
-        const qrY = y + (CARD_H - CARD_STRIP_H - QR_SIZE) / 2 - 4;
-        pg.drawImage(qrEmbed, { x: qrX, y: qrY, width: QR_SIZE, height: QR_SIZE });
-
-        // Thin border around QR
+        const qrX = x + CARD_W - QR_SIZE - 16;
+        const qrY = y + (CARD_H - CARD_STRIP_H - QR_SIZE) / 2 + 4;
         pg.drawRectangle({
-          x: qrX - 2, y: qrY - 2, width: QR_SIZE + 4, height: QR_SIZE + 4,
-          borderColor: rgb(0.82, 0.82, 0.86), borderWidth: 0.5,
+          x: qrX - 6,
+          y: qrY - 6,
+          width: QR_SIZE + 12,
+          height: QR_SIZE + 12,
+          color: C_WHITE,
+          borderColor: C_PURPLE,
+          borderWidth: 1,
         });
+        pg.drawImage(qrEmbed, { x: qrX, y: qrY, width: QR_SIZE, height: QR_SIZE });
       } catch {
         // silent QR embed failure
       }
 
-      // ── Decorative color dots (holi powder splash feel) ───────
+      // ── Decorative splashes ─────────────────────────────────
       const dotData: Array<{ dx: number; dy: number; r: number; c: typeof C_ORANGE; op: number }> = [
-        { dx: 8,           dy: 14,           r: 5, c: DOT_COLORS[0], op: 0.35 },
-        { dx: 18,          dy: 8,            r: 3, c: DOT_COLORS[1], op: 0.30 },
-        { dx: CARD_W - 14, dy: CARD_H - 44,  r: 4, c: DOT_COLORS[2], op: 0.25 },
-        { dx: CARD_W - 6,  dy: CARD_H - 52,  r: 3, c: DOT_COLORS[3], op: 0.20 },
-        { dx: 28,          dy: 12,           r: 2, c: DOT_COLORS[4], op: 0.25 },
-        { dx: 6,           dy: 22,           r: 2, c: DOT_COLORS[5], op: 0.20 },
+        { dx: 18,          dy: 14,           r: 6, c: DOT_COLORS[0], op: 0.35 },
+        { dx: 38,          dy: 10,           r: 4, c: DOT_COLORS[1], op: 0.30 },
+        { dx: CARD_W - 24, dy: CARD_H - 62,  r: 6, c: DOT_COLORS[2], op: 0.25 },
+        { dx: CARD_W - 12, dy: CARD_H - 78,  r: 4, c: DOT_COLORS[3], op: 0.20 },
+        { dx: 60,          dy: 26,           r: 3, c: DOT_COLORS[4], op: 0.25 },
+        { dx: 14,          dy: 32,           r: 3, c: DOT_COLORS[5], op: 0.20 },
       ];
       dotData.forEach(({ dx, dy, r, c, op }) => {
         pg.drawEllipse({ x: x + dx, y: y + dy, xScale: r, yScale: r, color: c, opacity: op });
       });
 
       // ── Footer ────────────────────────────────────────────────
-      pg.drawText('Valid for one entry only  ·  Non-transferable', {
-        x: x + 8, y: y + 5,
-        size: 5.5, font: regularFont, color: C_GRAY,
+      pg.drawText('Valid for one entry only · Non-transferable · Keep QR visible at gate', {
+        x: x + 14, y: y + 8,
+        size: 7, font: regularFont, color: C_GRAY,
       });
     }
 
