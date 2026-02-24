@@ -227,9 +227,9 @@ export class TicketsService {
     const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
     // ── Layout constants ──────────────────────────────────────────
-    // Single ticket per page to ensure one-per-row layout
+    // One ticket per row; four rows per page
     const COLS = 1;
-    const ROWS_PER_PAGE = 1;
+    const ROWS_PER_PAGE = 4;
     const TICKETS_PER_PAGE = COLS * ROWS_PER_PAGE;
     const PAGE_WIDTH = 595;
     const PAGE_HEIGHT = 842;
@@ -269,8 +269,8 @@ export class TicketsService {
     const BAND_COLORS = [C_ORANGE, C_PINK, C_PURPLE, C_GREEN, C_YELLOW, C_CYAN];
     const DOT_COLORS  = [C_PINK, C_YELLOW, C_GREEN, C_CYAN, C_PURPLE, C_ORANGE];
 
-    const CARD_STRIP_H = 62;       // header strip height
-    const QR_SIZE = 120;
+    const CARD_STRIP_H = 56;       // header strip height
+    const QR_SIZE = 100;
 
     // Memoized logo embeds
     const logoCache = new Map<string, any>();
@@ -339,10 +339,10 @@ export class TicketsService {
       // ── Card background ──────────────────────────────────────
       pg.drawRectangle({
         x, y, width: CARD_W, height: CARD_H,
-        color: C_LGRAY,
+        color: C_WHITE,
         borderColor: C_PINK,
         borderWidth: 2,
-        opacity: 0.98,
+        opacity: 0.99,
       });
 
       // ── Header strip with two logos ───────────────────────────
@@ -362,7 +362,7 @@ export class TicketsService {
 
       const leftLogo = rows[i].left_logo;
       const rightLogo = rows[i].right_logo;
-      const logoSize = 38;
+      const logoSize = 52;
       const logoPadding = 8;
 
       const leftEmbed = await embedLogo(leftLogo);
@@ -387,16 +387,16 @@ export class TicketsService {
 
       // Title in header
       pg.drawText('Holi Hai!', {
-        x: headerCenterX - 56,
-        y: y + CARD_H - CARD_STRIP_H + 24,
-        size: 20,
+        x: headerCenterX - 54,
+        y: y + CARD_H - CARD_STRIP_H + 20,
+        size: 18,
         font: boldFont,
         color: C_PURPLE,
       });
       pg.drawText('Celebrate with us', {
-        x: headerCenterX - 52,
-        y: y + CARD_H - CARD_STRIP_H + 10,
-        size: 10,
+        x: headerCenterX - 50,
+        y: y + CARD_H - CARD_STRIP_H + 8,
+        size: 9,
         font: regularFont,
         color: C_PINK,
       });
