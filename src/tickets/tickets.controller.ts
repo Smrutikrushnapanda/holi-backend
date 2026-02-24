@@ -84,6 +84,19 @@ export class TicketsController {
     res.end(pdfBuffer);
   }
 
+  // Export QR codes only as PDF (admin) — 20 or 30 per page
+  @Get('export/qr')
+  async exportQR(@Query('perPage') perPage: string, @Res() res: Response) {
+    const count = Math.min(200, Math.max(1, parseInt(perPage) || 20));
+    const pdfBuffer = await this.ticketsService.exportQROnlyPDF(count);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="holi-qr-${count}pp.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.end(pdfBuffer);
+  }
+
   // Get event settings (admin) — must come BEFORE :ticketNumber
   @Get('event-settings')
   async getEventSettings() {

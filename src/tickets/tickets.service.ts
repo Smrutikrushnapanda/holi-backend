@@ -552,6 +552,122 @@ export class TicketsService {
     return Buffer.from(pdfBytes);
   }
 
+  async exportQROnlyPDF(perPage: number = 20): Promise<Buffer> {
+    await this.initDB();
+    const { rows } = await this.pool.query(
+      'SELECT ticket_number, qr_image, status FROM tickets ORDER BY id ASC'
+    );
+
+    const pdfDoc = await PDFDocument.create();
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    const PAGE_WIDTH  = 595;
+    const PAGE_HEIGHT = 842;
+    const HEADER_H    = 36;
+    const MARGIN_X    = 20;
+    const MARGIN_TOP  = 10;
+    const MARGIN_BOT  = 20;
+    const GAP_X       = 8;
+    const GAP_Y       = 8;
+
+    const availW = PAGE_WIDTH  - 2 * MARGIN_X;
+    const availH = PAGE_HEIGHT - HEADER_H - MARGIN_TOP - MARGIN_BOT;
+
+    // Auto-compute grid dimensions that best fit perPage items on the page
+    const COLS = Math.ceil(Math.sqrt(perPage * (availW / availH)));
+    const ROWS = Math.ceil(perPage / COLS);
+
+    const CELL_W = Math.floor((availW - GAP_X * (COLS - 1)) / COLS);
+    const CELL_H = Math.floor((availH - GAP_Y * (ROWS - 1)) / ROWS);
+
+    const LABEL_H   = 13;
+    const QR_PAD    = 4;
+    const QR_SIZE   = Math.max(20, CELL_H - 2 * QR_PAD - LABEL_H - 4);
+    const labelSize = Math.max(5, Math.min(8, Math.floor(CELL_W / 13)));
+
+    const C_ORANGE = rgb(0.98, 0.45, 0.08);
+    const C_PINK   = rgb(0.95, 0.20, 0.55);
+    const C_PURPLE = rgb(0.52, 0.22, 0.80);
+    const C_GREEN  = rgb(0.10, 0.68, 0.32);
+    const C_YELLOW = rgb(0.98, 0.80, 0.02);
+    const C_CYAN   = rgb(0.05, 0.65, 0.80);
+    const C_WHITE  = rgb(1, 1, 1);
+    const C_DARK   = rgb(0.12, 0.08, 0.25);
+    const C_LGRAY  = rgb(0.95, 0.95, 0.97);
+    const C_USED   = rgb(0.88, 0.15, 0.15);
+    const BAND_COLORS = [C_ORANGE, C_PINK, C_PURPLE, C_GREEN, C_YELLOW, C_CYAN];
+
+    const TICKETS_PER_PAGE = COLS * ROWS;
+
+    for (let i = 0; i < rows.length; i++) {
+      const pageIndex = Math.floor(i / TICKETS_PER_PAGE);
+      const pos       = i % TICKETS_PER_PAGE;
+      const col       = pos % COLS;
+      const row       = Math.floor(pos / COLS);
+
+      // Add page on first ticket of each page
+      if (pos === 0) {
+        const pg = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+        const bandW = PAGE_WIDTH / BAND_COLORS.length;
+        BAND_COLORS.forEach((c, bi) => {
+          pg.drawRectangle({ x: bi * bandW, y: PAGE_HEIGHT - HEADER_H, width: bandW + 1, height: HEADER_H, color: c });
+        });
+        pg.drawText(`HOLI FESTIVAL 2026  ·  QR CODES  ·  ${perPage} per page`, {
+          x: 130, y: PAGE_HEIGHT - 22, size: 11, font: boldFont, color: C_WHITE,
+        });
+      }
+
+      const pg    = pdfDoc.getPage(pageIndex);
+      const cellX = MARGIN_X + col * (CELL_W + GAP_X);
+      const cellY = PAGE_HEIGHT - HEADER_H - MARGIN_TOP - (row + 1) * CELL_H - row * GAP_Y;
+
+      // Cell background
+      pg.drawRectangle({
+        x: cellX, y: cellY, width: CELL_W, height: CELL_H,
+        color: C_LGRAY,
+        borderColor: C_PINK,
+        borderWidth: 1,
+      });
+
+      // QR code
+      try {
+        const qrBase64 = rows[i].qr_image.replace('data:image/png;base64,', '');
+        const qrBytes  = Buffer.from(qrBase64, 'base64');
+        const qrEmbed  = await pdfDoc.embedPng(qrBytes);
+        const qrX = cellX + Math.floor((CELL_W - QR_SIZE) / 2);
+        const qrY = cellY + LABEL_H + QR_PAD;
+        pg.drawImage(qrEmbed, { x: qrX, y: qrY, width: QR_SIZE, height: QR_SIZE });
+      } catch {
+        // silent QR embed failure
+      }
+
+      // Ticket number label (centered)
+      const labelText  = rows[i].ticket_number;
+      const labelWidth = boldFont.widthOfTextAtSize(labelText, labelSize);
+      pg.drawText(labelText, {
+        x: cellX + Math.floor((CELL_W - labelWidth) / 2),
+        y: cellY + 4,
+        size: labelSize,
+        font: boldFont,
+        color: C_DARK,
+      });
+
+      // Used badge
+      if (rows[i].status === 'used') {
+        pg.drawText('USED', {
+          x: cellX + CELL_W - 22,
+          y: cellY + CELL_H - 10,
+          size: 5,
+          font: boldFont,
+          color: C_USED,
+        });
+      }
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    return Buffer.from(pdfBytes);
+  }
+
   async getTicketByNumber(ticketNumber: string) {
     await this.initDB();
     if (!ticketNumber) {
