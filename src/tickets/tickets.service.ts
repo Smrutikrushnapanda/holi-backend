@@ -470,7 +470,6 @@ export class TicketsService {
         { label: 'Live DJ · Rain Dance · Food · Colours', value: '', color: C_PURPLE },
         { label: 'Date',   value: rows[i].event_date, color: C_ORANGE },
         { label: 'Time',   value: rows[i].event_time, color: C_PINK },
-        { label: 'Price',  value: `Rs.${rows[i].event_price || DEFAULT_EVENT_PRICE}`, color: C_ORANGE },
         { label: 'Address', value: rows[i].event_place, color: C_GREEN },
         { label: 'Organizer', value: rows[i].organizer, color: C_CYAN },
       ];
