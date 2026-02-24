@@ -19,7 +19,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api', { exclude: [''] });
 
   const port = Number(process.env.PORT) || 5055;
-  const host = process.env.HOST || '127.0.0.1';
+  const host = process.env.HOST || '0.0.0.0';
   await app.listen(port, host);
   console.log(`Holiii Backend running on http://${host}:${port}/api`);
 }

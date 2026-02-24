@@ -127,11 +127,15 @@ export class TicketsService {
 
     let whereClause = '';
     const params: (string | number)[] = [limit, offset];
+    const countParams: string[] = [];
 
     if (status && ['used', 'unused'].includes(status)) {
       whereClause = `WHERE status = $3`;
       params.push(status);
+      countParams.push(status);
     }
+
+    const countWhereClause = countParams.length > 0 ? `WHERE status = $1` : '';
 
     const { rows } = await this.pool.query(
       `SELECT id, ticket_number, event_name, event_place, event_date, event_time,
@@ -143,8 +147,8 @@ export class TicketsService {
     );
 
     const { rows: countRows } = await this.pool.query(
-      `SELECT COUNT(*) as total FROM tickets ${whereClause}`,
-      status ? [status] : []
+      `SELECT COUNT(*) as total FROM tickets ${countWhereClause}`,
+      countParams
     );
 
     return {
